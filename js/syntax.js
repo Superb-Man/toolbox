@@ -482,107 +482,283 @@ function generateKernelKey(items) {
     return key;
 }
 
-function constructLR0Automaton(grammar) {
+// Lazy automaton construction for simulation
+// Start state is computed immeidately
+// Other states are computed when needed
+// Author : LK lover
+
+function createLR0Builder(grammar) {
     'use strict';
-    var i, j, k,
-        key,
-        keys = Object.keys(grammar),
-        follows = calcFollows(grammar),
-        automaton,
-        queue,
-        front = 0,
-        closure,
-        item,
-        items,
-        kernel,
+    var keys = Object.keys(grammar),
+        follows,
         kernels = {},
-        start;
-    if (keys.length === 0) {
-        return null;
-    }
-    start = keys[0] + "'";
-    while (grammar.hasOwnProperty(start)) {
-        start += "'";
-    }
-    automaton = calcClosure(grammar, [{
-        head: start,
-        body: ['.', keys[0]]
-    }]);
-    automaton.num = 0;
-    automaton.key = generateKernelKey(automaton.kernel);
-    automaton.edges = {};
-    kernels[automaton.key] = automaton;
-    queue = [automaton];
-    while (front < queue.length) {
-        closure = queue[front];
-        front += 1;
+        startSym,
+        start,
+        builder = {};
+
+    // given a closure, return the symbols that can be expanded from this closure
+
+    function pending(closure) {
+        var i, j, symbols = [], items;
         items = closure.kernel.concat(closure.nonkernel);
-        keys = [];
         for (i = 0; i < items.length; i += 1) {
             for (j = 0; j < items[i].body.length; j += 1) {
                 if (items[i].body[j] === '.') {
+                    // Check the symbol immediately after the dot
+                    // If it is a symbol, add it to the list of symbols that can be expanded
                     j += 1;
-                    if (j < items[i].body.length && keys.indexOf(items[i].body[j]) < 0) {
-                        keys.push(items[i].body[j]);
+                    if (j < items[i].body.length && symbols.indexOf(items[i].body[j]) < 0) {
+                        symbols.push(items[i].body[j]);
                     }
                     break;
                 }
             }
-            if (j === items[i].body.length && items[i].head === start) {
-                closure.accept = true;
-            }
         }
-        for (i = 0; i < keys.length; i += 1) {
-            kernel = [];
-            for (j = 0; j < items.length; j += 1) {
-                for (k = 0; k < items[j].body.length; k += 1) {
-                    if (items[j].body[k] === '.') {
-                        if (k + 1 < items[j].body.length && items[j].body[k + 1] === keys[i]) {
-                            item = {
-                                head: items[j].head,
-                                body: items[j].body.slice(0, k)
-                                    .concat([items[j].body[k + 1]])
-                                    .concat([items[j].body[k]])
-                                    .concat(items[j].body.slice(k + 2))
-                            };
-                            kernel.push(item);
-                        }
-                        break;
-                    }
-                }
-            }
-            if (kernel.length > 0) {
-                key = generateKernelKey(kernel);
-                if (kernels.hasOwnProperty(key)) {
-                    closure.edges[keys[i]] = kernels[key];
-                } else {
-                    kernel = calcClosure(grammar, kernel);
-                    kernel.num = Object.keys(kernels).length;
-                    kernel.key = key;
-                    kernel.edges = {};
-                    kernels[key] = kernel;
-                    closure.edges[keys[i]] = kernel;
-                    queue.push(kernel);
-                }
-            }
-        }
-        closure.reduces = {};
+        return symbols;
+    }
+
+
+    // given a closure, return the reduce actions that can be performed from this closure
+    // 1. For each item in the closure, if the dot is at the end, then this item can be reduced
+    // 2. For each reduce item, for each symbol in the follow set of the head of the item, add a reduce action for that symbol
+    // 3. Return the reduce actions as a dictionary of symbol -> list of items that can be reduced
+    function calcReduces(closure) {
+        var i, j, reduces = {};
         for (i = 0; i < closure.kernel.length; i += 1) {
-            if (closure.kernel[i].head !== start && closure.kernel[i].body[closure.kernel[i].body.length - 1] === '.') {
+            if (closure.kernel[i].head !== startSym &&
+                    closure.kernel[i].body[closure.kernel[i].body.length - 1] === '.') {
                 for (j = 0; j < follows[closure.kernel[i].head].length; j += 1) {
-                    if (!closure.reduces.hasOwnProperty(follows[closure.kernel[i].head][j])) {
-                        closure.reduces[follows[closure.kernel[i].head][j]] = [];
+                    if (!reduces.hasOwnProperty(follows[closure.kernel[i].head][j])) {
+                        reduces[follows[closure.kernel[i].head][j]] = [];
                     }
-                    closure.reduces[follows[closure.kernel[i].head][j]].push({
+                    reduces[follows[closure.kernel[i].head][j]].push({
                         head: closure.kernel[i].head,
                         body: closure.kernel[i].body.slice(0, closure.kernel[i].body.length - 1)
                     });
                 }
             }
         }
+        return reduces;
     }
-    return automaton;
+
+    function finalizeState(closure) {
+        var i, j, items = closure.kernel.concat(closure.nonkernel);
+        closure.reduces = calcReduces(closure);
+        for (i = 0; i < items.length; i += 1) {
+            for (j = 0; j < items[i].body.length; j += 1) {
+                if (items[i].body[j] === '.') {
+                    if (j === items[i].body.length - 1 && items[i].head === startSym) {
+                        closure.accept = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    function expand(closure, symbol) {
+        var j, k, items, kernel = [], key;
+        if (closure.edges.hasOwnProperty(symbol)) {
+            return closure.edges[symbol];
+        }
+        items = closure.kernel.concat(closure.nonkernel);
+        for (j = 0; j < items.length; j += 1) {
+            for (k = 0; k < items[j].body.length; k += 1) {
+                if (items[j].body[k] === '.') {
+                    if (k + 1 < items[j].body.length && items[j].body[k + 1] === symbol) {
+                        kernel.push({
+                            head: items[j].head,
+                            body: items[j].body.slice(0, k)
+                                .concat([items[j].body[k + 1]])
+                                .concat([items[j].body[k]])
+                                .concat(items[j].body.slice(k + 2))
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+        key = generateKernelKey(kernel);
+        if (!kernels.hasOwnProperty(key)) {
+            kernel = calcClosure(grammar, kernel);
+            kernel.num = Object.keys(kernels).length;
+            kernel.key = key;
+            kernel.edges = {};
+            kernels[key] = kernel;
+            finalizeState(kernel);
+        } else {
+            kernel = kernels[key];
+        }
+        closure.edges[symbol] = kernel;
+        return kernel;
+    }
+
+    function expandAll() {
+        var queue = [start],
+            visited = {},
+            front = 0,
+            closure,
+            symbols,
+            next,
+            i;
+        visited[start.key] = true;
+        while (front < queue.length) {
+            closure = queue[front];
+            front += 1;
+            symbols = pending(closure);
+            for (i = 0; i < symbols.length; i += 1) {
+                next = expand(closure, symbols[i]);
+                if (!visited.hasOwnProperty(next.key)) {
+                    visited[next.key] = true;
+                    queue.push(next);
+                }
+            }
+        }
+        return start;
+    }
+
+
+    if (keys.length === 0) {
+        return null;
+    }
+    follows = calcFollows(grammar);
+    startSym = keys[0] + "'";
+    while (grammar.hasOwnProperty(startSym)) {
+        startSym += "'";
+    }
+    start = calcClosure(grammar, [{
+        head: startSym,
+        body: ['.', keys[0]]
+    }]);
+
+    start.num = 0;
+    start.key = generateKernelKey(start.kernel);
+    start.edges = {};
+    kernels[start.key] = start;
+    finalizeState(start);
+
+    builder.start = start;
+    builder.expand = expand;
+    builder.expandAll = expandAll;
+    builder.pending = pending;
+
+
+    return builder;
+
+
 }
+    
+function constructLR0Automaton(grammar) {
+    'use strict';
+    var builder = createLR0Builder(grammar);
+    if (builder === null) {
+        return null;
+    }
+    return builder.expandAll();
+}
+
+
+// function constructLR0Automaton(grammar) {
+//     'use strict';
+//     var i, j, k,
+//         key,
+//         keys = Object.keys(grammar),
+//         follows = calcFollows(grammar),
+//         automaton,
+//         queue,
+//         front = 0,
+//         closure,
+//         item,
+//         items,
+//         kernel,
+//         kernels = {},
+//         start;
+//     if (keys.length === 0) {
+//         return null;
+//     }
+//     start = keys[0] + "'";
+//     while (grammar.hasOwnProperty(start)) {
+//         start += "'";
+//     }
+//     automaton = calcClosure(grammar, [{
+//         head: start,
+//         body: ['.', keys[0]]
+//     }]);
+//     automaton.num = 0;
+//     automaton.key = generateKernelKey(automaton.kernel);
+//     automaton.edges = {};
+//     kernels[automaton.key] = automaton;
+//     queue = [automaton];
+//     while (front < queue.length) {
+//         closure = queue[front];
+//         front += 1;
+//         items = closure.kernel.concat(closure.nonkernel);
+//         keys = [];
+//         for (i = 0; i < items.length; i += 1) {
+//             for (j = 0; j < items[i].body.length; j += 1) {
+//                 if (items[i].body[j] === '.') {
+//                     j += 1;
+//                     if (j < items[i].body.length && keys.indexOf(items[i].body[j]) < 0) {
+//                         keys.push(items[i].body[j]);
+//                     }
+//                     break;
+//                 }
+//             }
+//             if (j === items[i].body.length && items[i].head === start) {
+//                 closure.accept = true;
+//             }
+//         }
+//         for (i = 0; i < keys.length; i += 1) {
+//             kernel = [];
+//             for (j = 0; j < items.length; j += 1) {
+//                 for (k = 0; k < items[j].body.length; k += 1) {
+//                     if (items[j].body[k] === '.') {
+//                         if (k + 1 < items[j].body.length && items[j].body[k + 1] === keys[i]) {
+//                             item = {
+//                                 head: items[j].head,
+//                                 body: items[j].body.slice(0, k)
+//                                     .concat([items[j].body[k + 1]])
+//                                     .concat([items[j].body[k]])
+//                                     .concat(items[j].body.slice(k + 2))
+//                             };
+//                             kernel.push(item);
+//                         }
+//                         break;
+//                     }
+//                 }
+//             }
+//             if (kernel.length > 0) {
+//                 key = generateKernelKey(kernel);
+//                 if (kernels.hasOwnProperty(key)) {
+//                     closure.edges[keys[i]] = kernels[key];
+//                 } else {
+//                     kernel = calcClosure(grammar, kernel);
+//                     kernel.num = Object.keys(kernels).length;
+//                     kernel.key = key;
+//                     kernel.edges = {};
+//                     kernels[key] = kernel;
+//                     closure.edges[keys[i]] = kernel;
+//                     queue.push(kernel);
+//                 }
+//             }
+//         }
+//         closure.reduces = {};
+//         for (i = 0; i < closure.kernel.length; i += 1) {
+//             if (closure.kernel[i].head !== start && closure.kernel[i].body[closure.kernel[i].body.length - 1] === '.') {
+//                 for (j = 0; j < follows[closure.kernel[i].head].length; j += 1) {
+//                     if (!closure.reduces.hasOwnProperty(follows[closure.kernel[i].head][j])) {
+//                         closure.reduces[follows[closure.kernel[i].head][j]] = [];
+//                     }
+//                     closure.reduces[follows[closure.kernel[i].head][j]].push({
+//                         head: closure.kernel[i].head,
+//                         body: closure.kernel[i].body.slice(0, closure.kernel[i].body.length - 1)
+//                     });
+//                 }
+//             }
+//         }
+//     }
+//     return automaton;
+// }
 
 function indexOfItems(item, items) {
     'use strict';
@@ -974,4 +1150,5 @@ if (typeof require === 'function') {
     exports.calcLR1Closure = calcLR1Closure;
     exports.constructLR1Automaton = constructLR1Automaton;
     exports.constructLALRAutomaton = constructLALRAutomaton;
+    exports.createLR0Builder = createLR0Builder;
 }
