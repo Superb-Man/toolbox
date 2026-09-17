@@ -134,7 +134,7 @@ function genAutomataSVG(svgId, start) {
     svg.attr('height', Math.max(document.getElementById('graph_column').clientHeight, g.graph().height * 1.5 + 40));
 }
 
-function genAutomatonLR0(svgId, start, highlight) {
+function genAutomatonLRItems(svgId, start, highlight) {
     'use strict';
     var ids = {},
         node,
@@ -223,19 +223,32 @@ function genAutomatonLR0(svgId, start, highlight) {
     g.graph().rankdir = 'LR';
     render(inner, g);
 
+    svg.attr('width', Math.max(+svg.attr('width') || 0, g.graph().width + 20));
     zoom
         .translate([(svg.attr("width") - g.graph().width) / 2, 20])
         .event(svg);
     svg.attr('height', g.graph().height * 1.5 + 40);
 }
 
-function genAutomatonLR1(svgId, start) {
+// LR(0) and SLR(1) use the same item diagram, with different parsing tables.
+function genAutomatonLR0(svgId, start, highlight) {
+    'use strict';
+    genAutomatonLRItems(svgId, start, highlight);
+}
+
+function genAutomatonSLR1(svgId, start, highlight) {
+    'use strict';
+    genAutomatonLRItems(svgId, start, highlight);
+}
+
+function genAutomatonLR1(svgId, start, highlight) {
     'use strict';
     var ids = {},
         node,
         label,
         keys,
         next,
+        cls,
         i,
         front = 0,
         queue = [start],
@@ -258,22 +271,35 @@ function genAutomatonLR1(svgId, start) {
         return items.map(prettyPrintItem, items).join('\n');
     }
 
+    inner.selectAll('*').remove(); // clear the inner svg before rendering
+
     while (front < queue.length) {
         node = queue[front];
-        ids[node.key] = node;
+        ids[node.num] = node;
         label = 'I' + node.num + '\n===\n' + prettyPrintItems(node.kernel) + '\n---\n' + prettyPrintItems(node.nonkernel);
-        g.setNode(node.key, {shape: 'rect', label: label});
+        cls = '';
+        if (highlight) {
+            if (node.num === highlight.to) {
+                cls = 'newly-added';
+            } else if (node.num === highlight.from) {
+                cls = 'edge-source';
+            }
+        }
+        g.setNode('n' + node.num, {shape: 'rect', label: label, 'class': cls});
         keys = Object.keys(node.edges);
         for (i = 0; i < keys.length; i += 1) {
             next = node.edges[keys[i]];
-            g.setEdge(node.key, next.key, {label: keys[i]});
-            if (!ids.hasOwnProperty(next.key)) {
+            g.setEdge('n' + node.num, 'n' + next.num, {
+                label: keys[i],
+                'class': (highlight && node.num === highlight.from && next.num === highlight.to) ? 'edge-new' : ''
+            });
+            if (!ids.hasOwnProperty(next.num)) {
                 queue.push(next);
             }
         }
         if (node.accept) {
-            g.setNode(node.key + '_accept', {shape: 'text', label: 'accept'});
-            g.setEdge(node.key, node.key + '_accept', {label: '$'});
+            g.setNode('accept_' + node.num, {shape: 'text', label: 'accept'});
+            g.setEdge('n' + node.num, 'accept_' + node.num, {label: '$'});
         }
         front += 1;
     }
@@ -302,6 +328,7 @@ function genAutomatonLR1(svgId, start) {
 
     g.graph().rankdir = 'LR';
     render(inner, g);
+    svg.attr('width', Math.max(+svg.attr('width') || 0, g.graph().width + 20));
     zoom
         .translate([(svg.attr("width") - g.graph().width) / 2, 20])
         .event(svg);
