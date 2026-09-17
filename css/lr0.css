@@ -1,3 +1,78 @@
-.well li, #input_grammar, #output_grammar, table, tspan {
+.well li,
+#input_grammar,
+#output_grammar,
+table,
+tspan {
     font-family: "Courier New", "Consolas", "Monaco", "Lucida Console", "Liberation Mono", "Menlo", monospace;
+}
+
+#step_panel .step-state {
+    margin-bottom: 6px;
+}
+
+#step_panel .step-state-name {
+    display: inline-block;
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+#step_panel .step-symbols .btn {
+    margin-right: 4px;
+}
+
+#step_panel .step-symbol {
+    background-color: #fff;
+    color: #000;
+    font-weight: bold;
+    border: 1px solid #000;
+}
+
+#step_panel .step-symbol.visited {
+    background-color: #c8f7c5;
+}
+
+#tool_row {
+    display: flex;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    align-items: flex-start;
+}
+
+#step_column {
+    flex: 0 0 300px;
+    width: 300px;
+    max-width: 300px;
+    padding: 0 10px 0 0;
+}
+
+#graph_column {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+    overflow-x: auto;
+    overflow-y: auto;
+    height: calc(100vh - 180px);
+}
+
+#svg {
+    display: block;
+    margin: 0;
+}
+
+#svg g.node.newly-added rect {
+    stroke: #ff5722;   
+    stroke-width: 3;
+}
+
+#svg g.node.edge-source rect {
+    stroke: #4caf50;  
+    stroke-width: 3;
+}
+
+#svg g.edgePath.edge-new path {
+    stroke: #1e88e5;  
+    stroke-width: 3;
 }

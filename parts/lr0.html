@@ -65,11 +65,13 @@ F -> ( E ) | id
   <strong>Invalid Grammar</strong>
   <p id="p_error"></p>
 </div>
-<div class="row">
-  <div class="col-xs-12">
-    <svg id="svg" width="800">
-      <g></g>
-    </svg>
+<div class="row" id="tool_row">
+  <div id="step_column">
+    <div id="step_panel" class="well"></div>
+    <button id="button_expand_all" class="btn btn-raised btn-default btn-block">Expand all</button>
+  </div>
+  <div id="graph_column">
+    <svg id="svg"><g></g></svg>
   </div>
 </div>
 <div class="row">

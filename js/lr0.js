@@ -1,8 +1,15 @@
 /*jslint browser: true*/
-/*global window, parseGrammar, calcFollows, constructLR0Automaton, genAutomatonLR0, $*/
+/*global window, parseGrammar, calcFollows, createLR0Builder, genAutomatonLR0, d3, $*/
 
 $(document).ready(function () {
     'use strict';
+
+    var builder = null,
+        grammar = null,
+        follows = null,
+        newlyAdded = null,
+        input;
+
 
     function b64EncodeUnicode(str) {
         return window.btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function (match, p1) {
@@ -133,20 +140,147 @@ $(document).ready(function () {
         $('#parsing_table').html(html);
     }
 
+    function redraw() {
+        redrawGraph();
+        renderStepPanel();
+    }
+
+    function redrawGraph() {
+        d3.select('#svg').select('g').selectAll('*').remove();
+        $('svg').attr('width', $('svg').parent().width());   // add this line
+        genAutomatonLR0('svg', builder.start, newlyAdded);
+        
+        // if (newlyAdded !== null) {
+        //     d3.select('#svg').selectAll('g.node').each(function () {
+        //         if (d3.select(this).select('text').text().indexOf('I' + newlyAdded) === 0) {
+        //             d3.select(this).classed('newly-added', true);
+        //         }
+        //     });
+        // }
+
+        showParsingTable(grammar, follows, builder.start);
+    }
+
+
+    function collectStates(start) {
+        var queue = [start],
+            visited = {},
+            states = [],
+            front = 0,
+            node,
+            keys,
+            i;
+        visited[start.key] = true;
+        while (front < queue.length) {
+            node = queue[front];
+            front += 1;
+            states.push(node);
+            keys = Object.keys(node.edges);
+            for (i = 0; i < keys.length; i += 1) {
+                if (!visited.hasOwnProperty(node.edges[keys[i]].key)) {
+                    visited[node.edges[keys[i]].key] = true;
+                    queue.push(node.edges[keys[i]]);
+                }
+            }
+        }
+        return states;
+    }
+
+    function findStateByNum(num) {
+        var states = collectStates(builder.start), i;
+        for (i = 0; i < states.length; i += 1) {
+            if (states[i].num === num) {
+                return states[i];
+            }
+        }
+        return builder.start;
+    }
+
+    function renderStepPanel() {
+        var states = collectStates(builder.start),
+            html = '',
+            i,
+            node,
+            syms,
+            j;
+        html += '<h5>Step-through construction</h5>';
+        html += '<p>States built so far. Click a symbol to expand that transition.</p>';
+        for (i = 0; i < states.length; i += 1) {
+            node = states[i];
+            syms = builder.pending(node);
+            html += '<div class="step-state">';
+            html += '<span class="step-state-name">I' + node.num + (node.accept ? ' (accept)' : '') + '</span>';
+            if (syms.length > 0) {
+                html += '<span class="step-symbols">';
+                for (j = 0; j < syms.length; j += 1) {
+                    html += '<button class="btn btn-xs step-symbol' +
+                    (node.edges.hasOwnProperty(syms[j]) ? ' visited' : '') +
+                    '" data-num="' + node.num + '" data-symbol="' + syms[j] + '">' + syms[j] + '</button>';
+
+                }
+                html += '</span>';
+            } else {
+                html += '<span class="step-symbols text-muted">no more transitions</span>';
+            }
+            html += '</div>';
+        }
+        $('#step_panel').html(html);
+        $('#step_panel .step-symbol').off('click').on('click', function () {
+            var num = parseInt($(this).attr('data-num'), 10),
+                symbol = $(this).attr('data-symbol'),
+                state = findStateByNum(num);
+            newlyAdded = { from: state.num, to: builder.expand(state, symbol).num };
+            redraw();
+
+        });
+        $('#button_expand_all').off('click').on('click', expandAll);
+    }
+
+    function expandAll() {
+        var queue = [builder.start],
+            visited = {},
+            front = 0,
+            node,
+            syms,
+            next,
+            i;
+        visited[builder.start.key] = true;
+        while (front < queue.length) {
+            node = queue[front];
+            front += 1;
+            syms = builder.pending(node);
+            for (i = 0; i < syms.length; i += 1) {
+                next = builder.expand(node, syms[i]);
+                if (!visited.hasOwnProperty(next.key)) {
+                    visited[next.key] = true;
+                    queue.push(next);
+                }
+            }
+        }
+        redraw();
+        newlyAdded = null;
+    }
+
+
+
     $('#button_construct').click(function () {
-        var grammar = parseGrammar($('#input_grammar').val()),
-            follows = calcFollows(grammar),
-            automaton = constructLR0Automaton(grammar),
-            prefix = window.location.href.split('?')[0] + '?grammar=',
+        var prefix = window.location.href.split('?')[0] + '?grammar=',
             input = b64EncodeUnicode($('#input_grammar').val());
+        grammar = parseGrammar($('#input_grammar').val());
+        builder = createLR0Builder(grammar);
+        if (grammar === null || builder === null) {
+            $('#alert_error').show();
+            return;
+        }
+        follows = calcFollows(grammar);
         $('#input_url').val(prefix + input);
         $('#alert_error').hide();
-        showParsingTable(grammar, follows, automaton);
-        $('svg').attr("width", $('svg').parent().width());
-        genAutomatonLR0('svg', automaton);
+        newlyAdded = null;
+        redraw();
     });
 
-    var input = getParameterByName('grammar');
+
+    input = getParameterByName('grammar');
     if (input) {
         input = b64DecodeUnicode(input);
         $('#input_grammar').val(input);
