@@ -7,7 +7,7 @@
       <h4>Introduction</h4>
       <hr>
       <p>
-        Construct automaton and parsing table for LALR grammars.
+        Construct the complete LALR automaton and parsing table, or build it step by step. Conflicts do not prevent diagram construction.
       </p>
     </div>
   </span>
@@ -55,7 +55,10 @@ C -> c C | d
   </div>
 </div>
 <div class="row">
-  <div class="col-md-offset-10 col-md-2">
+  <div class="col-md-offset-8 col-md-2">
+    <button id="button_step" class="btn btn-raised btn-block btn-default">Step by step</button>
+  </div>
+  <div class="col-md-2">
     <button id="button_construct" class="btn btn-raised btn-block btn-primary">Construct</button>
   </div>
 </div>
@@ -64,11 +67,13 @@ C -> c C | d
   <strong>Invalid Grammar</strong>
   <p id="p_error"></p>
 </div>
-<div class="row">
-  <div class="col-xs-12">
-    <svg id="svg" width="800">
-      <g></g>
-    </svg>
+<div class="row" id="tool_row">
+  <div id="step_column">
+    <div id="step_panel" class="well"></div>
+    <button id="button_expand_all" class="btn btn-raised btn-default btn-block">Expand all</button>
+  </div>
+  <div id="graph_column">
+    <svg id="svg"><g></g></svg>
   </div>
 </div>
 <div class="row">
@@ -88,3 +93,5 @@ C -> c C | d
 <script src="./lib/js/dagre-d3.min.js"></script>
 <script src="./js/syntax.js"></script>
 <script src="./js/automata.js"></script>
+
+<script src="./js/lr_parser.js"></script>

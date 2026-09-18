@@ -251,9 +251,16 @@ function initLRParserPage(createBuilder, renderAutomaton) {
     function construct(stepwise) {
         var prefix = window.location.href.split('?')[0] + '?grammar=',
             input = b64EncodeUnicode($('#input_grammar').val());
-        grammar = parseGrammar($('#input_grammar').val());
-        builder = createBuilder(grammar);
+        try {
+            grammar = parseGrammar($('#input_grammar').val());
+            builder = createBuilder(grammar);
+        } catch (error) {
+            $('#p_error').text(error.message);
+            $('#alert_error').show();
+            return;
+        }
         if (grammar === null || builder === null) {
+            $('#p_error').text('Enter at least one production using -> or →.');
             $('#alert_error').show();
             return;
         }

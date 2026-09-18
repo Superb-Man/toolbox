@@ -1,3 +1,1 @@
-.well li, #input_grammar, #output_grammar, table, tspan {
-    font-family: "Courier New", "Consolas", "Monaco", "Lucida Console", "Liberation Mono", "Menlo", monospace;
-}
+@import url("./lr1.css");

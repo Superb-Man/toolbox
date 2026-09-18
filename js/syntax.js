@@ -15,7 +15,7 @@ function parseGrammar(text) {
             return token.length > 0;
         });
     while (index < tokens.length) {
-        if (index + 1 < tokens.length && tokens[index + 1] === '->') {
+        if (index + 1 < tokens.length && (tokens[index + 1] === '->' || tokens[index + 1] === '→')) {
             head = tokens[index];
             index += 2;
             if (head in grammar) {
@@ -23,6 +23,8 @@ function parseGrammar(text) {
             } else {
                 grammar[head] = [[]];
             }
+        } else if (head === null) {
+            throw new Error('Start each production with a nonterminal followed by -> or →. Separate tokens with spaces.');
         } else if (tokens[index] === '|') {
             grammar[head].push([]);
             index += 1;
@@ -813,43 +815,94 @@ function generateLR1KernelKey(items) {
     return key;
 }
 
-function createLR1Builder(grammar) {
+function createLR1Builder(grammar, lalr) {
     'use strict';
+
     var keys = Object.keys(grammar),
         nullables,
         firsts,
         kernels = {},
+        dirty = [],
+        propagating = false,
         startSym,
         start,
         builder = {};
 
-    // given a closure, return the symbols that can be expanded from this closure
+    function stateKey(items) {
+        if (!lalr) {
+            return generateLR1KernelKey(items);
+        }
+
+        // LALR identifies states by their cores, ignoring lookaheads.
+        // Sort consistently so mergeLookahead can match items by index.
+        items.sort(function (a, b) {
+            var left = JSON.stringify([a.head, a.body]),
+                right = JSON.stringify([b.head, b.body]);
+            return left < right ? -1 : (left > right ? 1 : 0);
+        });
+
+        return generateKernelKey(items);
+    }
+
+    function propagate() {
+        var state, symbols, i;
+
+        if (propagating) {
+            return;
+        }
+
+        propagating = true;
+
+        while (dirty.length) {
+            state = dirty.shift();
+            symbols = Object.keys(state.edges);
+
+            // Propagate through already-expanded transitions only.
+            for (i = 0; i < symbols.length; i += 1) {
+                expand(state, symbols[i]);
+            }
+        }
+
+        propagating = false;
+    }
+
     function pending(closure) {
         var i, j, symbols = [], items;
+
         items = closure.kernel.concat(closure.nonkernel);
+
         for (i = 0; i < items.length; i += 1) {
             for (j = 0; j < items[i].body.length; j += 1) {
                 if (items[i].body[j] === '.') {
                     j += 1;
-                    if (j < items[i].body.length && symbols.indexOf(items[i].body[j]) < 0) {
+
+                    if (j < items[i].body.length &&
+                            symbols.indexOf(items[i].body[j]) < 0) {
                         symbols.push(items[i].body[j]);
                     }
+
                     break;
                 }
             }
         }
+
         return symbols;
     }
 
     function finalizeState(closure) {
-        var i, j, items = closure.kernel.concat(closure.nonkernel);
+        var i, j,
+            items = closure.kernel.concat(closure.nonkernel);
+
         closure.reduces = calcStateReduces(closure, startSym);
+
         for (i = 0; i < items.length; i += 1) {
             for (j = 0; j < items[i].body.length; j += 1) {
                 if (items[i].body[j] === '.') {
-                    if (j === items[i].body.length - 1 && items[i].head === startSym) {
+                    if (j === items[i].body.length - 1 &&
+                            items[i].head === startSym) {
                         closure.accept = true;
                     }
+
                     break;
                 }
             }
@@ -857,15 +910,23 @@ function createLR1Builder(grammar) {
     }
 
     function expand(closure, symbol) {
-        var j, k, items, kernel = [], key;
-        if (closure.edges.hasOwnProperty(symbol)) {
+        var j, k, items,
+            kernel = [],
+            key,
+            target,
+            updated;
+
+        if (!lalr && closure.edges.hasOwnProperty(symbol)) {
             return closure.edges[symbol];
         }
+
         items = closure.kernel.concat(closure.nonkernel);
+
         for (j = 0; j < items.length; j += 1) {
             for (k = 0; k < items[j].body.length; k += 1) {
                 if (items[j].body[k] === '.') {
-                    if (k + 1 < items[j].body.length && items[j].body[k + 1] === symbol) {
+                    if (k + 1 < items[j].body.length &&
+                            items[j].body[k + 1] === symbol) {
                         kernel.push({
                             head: items[j].head,
                             body: items[j].body.slice(0, k)
@@ -875,22 +936,54 @@ function createLR1Builder(grammar) {
                             lookahead: [].concat(items[j].lookahead)
                         });
                     }
+
                     break;
                 }
             }
         }
-        key = generateLR1KernelKey(kernel);
+
+        if (kernel.length === 0) {
+            return null;
+        }
+
+        key = stateKey(kernel);
+
         if (!kernels.hasOwnProperty(key)) {
-            kernel = calcLR1Closure(grammar, kernel, nullables, firsts);
+            kernel = calcLR1Closure(
+                grammar, kernel, nullables, firsts
+            );
             kernel.num = Object.keys(kernels).length;
             kernel.key = key;
             kernel.edges = {};
+
             kernels[key] = kernel;
             finalizeState(kernel);
         } else {
-            kernel = kernels[key];
+            target = kernels[key];
+
+            if (lalr && mergeLookahead(target.kernel, kernel)) {
+                // calcLR1Closure appends items to its input array.
+                // Pass a copy to preserve the state's kernel.
+                updated = calcLR1Closure(
+                    grammar,
+                    target.kernel.slice(),
+                    nullables,
+                    firsts
+                );
+
+                target.kernel = updated.kernel;
+                target.nonkernel = updated.nonkernel;
+                finalizeState(target);
+
+                dirty.push(target);
+            }
+
+            kernel = target;
         }
+
         closure.edges[symbol] = kernel;
+        propagate();
+
         return kernel;
     }
 
@@ -902,39 +995,49 @@ function createLR1Builder(grammar) {
             symbols,
             next,
             i;
+
         visited[start.key] = true;
+
         while (front < queue.length) {
             closure = queue[front];
             front += 1;
             symbols = pending(closure);
+
             for (i = 0; i < symbols.length; i += 1) {
                 next = expand(closure, symbols[i]);
+
                 if (!visited.hasOwnProperty(next.key)) {
                     visited[next.key] = true;
                     queue.push(next);
                 }
             }
         }
+
         return start;
     }
 
     if (keys.length === 0) {
         return null;
     }
+
     nullables = calcNullables(grammar);
     firsts = calcFirsts(grammar, nullables);
+
     startSym = keys[0] + "'";
     while (grammar.hasOwnProperty(startSym)) {
         startSym += "'";
     }
+
     start = calcLR1Closure(grammar, [{
         head: startSym,
         body: ['.', keys[0]],
         lookahead: ['$']
     }], nullables, firsts);
+
     start.num = 0;
-    start.key = generateLR1KernelKey(start.kernel);
+    start.key = stateKey(start.kernel);
     start.edges = {};
+
     kernels[start.key] = start;
     finalizeState(start);
 
@@ -1099,115 +1202,127 @@ function mergeLookahead(a, b) {
     return changed;
 }
 
+function createLALRBuilder(grammar) {
+    'use strict';
+    return createLR1Builder(grammar, true);
+}
+
 function constructLALRAutomaton(grammar) {
     'use strict';
-    var i, j, k,
-        key,
-        keys = Object.keys(grammar),
-        nullables = calcNullables(grammar),
-        firsts = calcFirsts(grammar, nullables),
-        automaton,
-        queue,
-        front = 0,
-        closure,
-        item,
-        items,
-        kernel,
-        kernels = {},
-        kernelCount = 0,
-        start;
-    if (keys.length === 0) {
-        return null;
-    }
-    start = keys[0] + "'";
-    while (grammar.hasOwnProperty(start)) {
-        start += "'";
-    }
-    automaton = calcLR1Closure(grammar, [{
-        head: start,
-        body: ['.', keys[0]],
-        lookahead: ['$']
-    }], nullables, firsts);
-    automaton.num = 0;
-    automaton.key = generateKernelKey(automaton.kernel);
-    automaton.edges = {};
-    kernels[automaton.key] = automaton;
-    queue = [automaton];
-    while (front < queue.length) {
-        closure = queue[front];
-        front += 1;
-        items = closure.kernel.concat(closure.nonkernel);
-        keys = [];
-        for (i = 0; i < items.length; i += 1) {
-            for (j = 0; j < items[i].body.length; j += 1) {
-                if (items[i].body[j] === '.') {
-                    j += 1;
-                    if (j < items[i].body.length && keys.indexOf(items[i].body[j]) < 0) {
-                        keys.push(items[i].body[j]);
-                    }
-                    break;
-                }
-            }
-            if (j === items[i].body.length && items[i].head === start) {
-                closure.accept = true;
-            }
-        }
-        for (i = 0; i < keys.length; i += 1) {
-            kernel = [];
-            for (j = 0; j < items.length; j += 1) {
-                for (k = 0; k < items[j].body.length; k += 1) {
-                    if (items[j].body[k] === '.') {
-                        if (k + 1 < items[j].body.length && items[j].body[k + 1] === keys[i]) {
-                            item = {
-                                head: items[j].head,
-                                body: items[j].body.slice(0, k)
-                                    .concat([items[j].body[k + 1]])
-                                    .concat([items[j].body[k]])
-                                    .concat(items[j].body.slice(k + 2)),
-                                lookahead: [].concat(items[j].lookahead)
-                            };
-                            kernel.push(item);
-                        }
-                        break;
-                    }
-                }
-            }
-            if (kernel.length > 0) {
-                key = generateKernelKey(kernel);
-                if (kernels.hasOwnProperty(key)) {
-                    if (mergeLookahead(kernels[key].kernel, kernel)) {
-                        kernel = kernels[key].kernel.slice();
-                        delete kernels[key].kernel;
-                        delete kernels[key].nonkernel;
-                        kernel = calcLR1Closure(grammar, kernel, nullables, firsts);
-                        kernels[key].kernel = kernel.kernel;
-                        kernels[key].nonkernel = kernel.nonkernel;
-                        queue.push(kernels[key]);
-                    }
-                } else {
-                    kernel = calcLR1Closure(grammar, kernel, nullables, firsts);
-                    kernelCount += 1;
-                    kernel.num = kernelCount;
-                    kernel.key = key;
-                    kernel.edges = {};
-                    kernels[key] = kernel;
-                    queue.push(kernel);
-                }
-                closure.edges[keys[i]] = key;
-            }
-        }
-    }
-    keys = Object.keys(kernels);
-    for (k = 0; k < keys.length; k += 1) {
-        key = Object.keys(kernels[keys[k]].edges);
-        for (j = 0; j < key.length; j += 1) {
-            kernels[keys[k]].edges[key[j]] = kernels[kernels[keys[k]].edges[key[j]]];
-        }
-        closure = kernels[keys[k]];
-        closure.reduces = calcStateReduces(closure, start);
-    }
-    return automaton;
+    var builder = createLALRBuilder(grammar);
+    if (builder === null) { return null; }
+    return builder.expandAll();
 }
+
+// function constructLALRAutomaton(grammar) {
+//     'use strict';
+//     var i, j, k,
+//         key,
+//         keys = Object.keys(grammar),
+//         nullables = calcNullables(grammar),
+//         firsts = calcFirsts(grammar, nullables),
+//         automaton,
+//         queue,
+//         front = 0,
+//         closure,
+//         item,
+//         items,
+//         kernel,
+//         kernels = {},
+//         kernelCount = 0,
+//         start;
+//     if (keys.length === 0) {
+//         return null;
+//     }
+//     start = keys[0] + "'";
+//     while (grammar.hasOwnProperty(start)) {
+//         start += "'";
+//     }
+//     automaton = calcLR1Closure(grammar, [{
+//         head: start,
+//         body: ['.', keys[0]],
+//         lookahead: ['$']
+//     }], nullables, firsts);
+//     automaton.num = 0;
+//     automaton.key = generateKernelKey(automaton.kernel);
+//     automaton.edges = {};
+//     kernels[automaton.key] = automaton;
+//     queue = [automaton];
+//     while (front < queue.length) {
+//         closure = queue[front];
+//         front += 1;
+//         items = closure.kernel.concat(closure.nonkernel);
+//         keys = [];
+//         for (i = 0; i < items.length; i += 1) {
+//             for (j = 0; j < items[i].body.length; j += 1) {
+//                 if (items[i].body[j] === '.') {
+//                     j += 1;
+//                     if (j < items[i].body.length && keys.indexOf(items[i].body[j]) < 0) {
+//                         keys.push(items[i].body[j]);
+//                     }
+//                     break;
+//                 }
+//             }
+//             if (j === items[i].body.length && items[i].head === start) {
+//                 closure.accept = true;
+//             }
+//         }
+//         for (i = 0; i < keys.length; i += 1) {
+//             kernel = [];
+//             for (j = 0; j < items.length; j += 1) {
+//                 for (k = 0; k < items[j].body.length; k += 1) {
+//                     if (items[j].body[k] === '.') {
+//                         if (k + 1 < items[j].body.length && items[j].body[k + 1] === keys[i]) {
+//                             item = {
+//                                 head: items[j].head,
+//                                 body: items[j].body.slice(0, k)
+//                                     .concat([items[j].body[k + 1]])
+//                                     .concat([items[j].body[k]])
+//                                     .concat(items[j].body.slice(k + 2)),
+//                                 lookahead: [].concat(items[j].lookahead)
+//                             };
+//                             kernel.push(item);
+//                         }
+//                         break;
+//                     }
+//                 }
+//             }
+//             if (kernel.length > 0) {
+//                 key = generateKernelKey(kernel);
+//                 if (kernels.hasOwnProperty(key)) {
+//                     if (mergeLookahead(kernels[key].kernel, kernel)) {
+//                         kernel = kernels[key].kernel.slice();
+//                         delete kernels[key].kernel;
+//                         delete kernels[key].nonkernel;
+//                         kernel = calcLR1Closure(grammar, kernel, nullables, firsts);
+//                         kernels[key].kernel = kernel.kernel;
+//                         kernels[key].nonkernel = kernel.nonkernel;
+//                         queue.push(kernels[key]);
+//                     }
+//                 } else {
+//                     kernel = calcLR1Closure(grammar, kernel, nullables, firsts);
+//                     kernelCount += 1;
+//                     kernel.num = kernelCount;
+//                     kernel.key = key;
+//                     kernel.edges = {};
+//                     kernels[key] = kernel;
+//                     queue.push(kernel);
+//                 }
+//                 closure.edges[keys[i]] = key;
+//             }
+//         }
+//     }
+//     keys = Object.keys(kernels);
+//     for (k = 0; k < keys.length; k += 1) {
+//         key = Object.keys(kernels[keys[k]].edges);
+//         for (j = 0; j < key.length; j += 1) {
+//             kernels[keys[k]].edges[key[j]] = kernels[kernels[keys[k]].edges[key[j]]];
+//         }
+//         closure = kernels[keys[k]];
+//         closure.reduces = calcStateReduces(closure, start);
+//     }
+//     return automaton;
+// }
 
 if (typeof require === 'function') {
     exports.grammarTerminals = grammarTerminals;
@@ -1227,4 +1342,5 @@ if (typeof require === 'function') {
     exports.createLR0Builder = createLR0Builder;
     exports.createSLR1Builder = createSLR1Builder;
     exports.constructSLR1Automaton = constructSLR1Automaton;
+    exports.createLALRBuilder = createLALRBuilder;
 }
